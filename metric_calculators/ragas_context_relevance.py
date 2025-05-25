@@ -13,6 +13,8 @@ from metric_calculators.check_openai_key import check_openai_api_key
 DATA_SAVE_DIR = './data'
 DENSE_STORAGE_PATH = 'retriever_storage/dense_all_minilm_l6_v2' 
 TFIDF_STORAGE_PATH = 'retriever_storage/tfidf_baseline'
+RAGAS_RESULTS_FILE = "ragas_results/ragas_context_relevance_results.csv"
+FORCE_RERUN_RAGAS = False
 
 if not check_openai_api_key():
     print("a valid OPENAI_API_KEY is not set. Aborting")
@@ -201,51 +203,94 @@ if len(ragas_input_df_filtered) < len(ragas_input_df):
     print(f"Filtered out {len(ragas_input_df) - len(ragas_input_df_filtered)} entries with no retrieved contexts for RAGAS.")
 
 
-try:
-    if not ragas_input_df_filtered.empty:
-        ragas_hf_dataset = Dataset.from_pandas(ragas_input_df_filtered)
+print(f"\nAttempting to run or load RAGAS context_relevance (requires LLM environment for RAGAS if running)...")
+ragas_summary_df = None
 
-        results_accumulator = []
-
-        for retriever_t in ragas_input_df_filtered['retriever_type'].unique():
-            print(f"\nEvaluating context_relevance for: {retriever_t}")
-            subset_df = ragas_input_df_filtered[ragas_input_df_filtered['retriever_type'] == retriever_t]
-            if not subset_df.empty:
-                subset_hf_dataset = Dataset.from_pandas(subset_df)
-                
-                try:
-                    score = evaluate(
-                        dataset=subset_hf_dataset,
-                        metrics=[ContextRelevance()],
-                        # llm=ragas_llm, # If not set, used default OpenAI llm
-                        # embeddings=ragas_embeddings, # If not set, used default OpenAI embedding
-                        raise_exceptions=True 
-                    )
-                    print(f"RAGAS Context Relevance Score for {retriever_t}:")
-                    print(score)
-                    results_accumulator.append({'retriever_type': retriever_t, 'context_relevance': score.get('context_relevance', float('nan'))})
-                except Exception as e:
-                    print(f"Could not run RAGAS evaluation for {retriever_t} due to LLM/environment error: {e}")
-                    print("Please ensure your RAGAS LLM (e.g., OpenAI API key) is correctly configured.")
-                    results_accumulator.append({'retriever_type': retriever_t, 'context_relevance': float('nan')})
-            else:
-                print(f"No data to evaluate for {retriever_t}")
-        
-        if results_accumulator:
-            ragas_summary_df = pd.DataFrame(results_accumulator)
-            print("\n--- RAGAS Context Relevance Summary ---")
-            print(ragas_summary_df)
+# Check if results file already exists and we don't want to force a rerun
+if os.path.exists(RAGAS_RESULTS_FILE) and not FORCE_RERUN_RAGAS:
+    print(f"Loading existing RAGAS results from: {RAGAS_RESULTS_FILE}")
+    try:
+        ragas_summary_df = pd.read_csv(RAGAS_RESULTS_FILE)
+        if 'retriever_type' not in ragas_summary_df.columns or 'context_relevance' not in ragas_summary_df.columns:
+            print("Warning: Existing RAGAS results file is missing expected columns. Will re-run RAGAS.")
+            ragas_summary_df = None # Force re-run
         else:
-            print("No RAGAS results to summarize.")
-
+            print("Successfully loaded existing RAGAS results.")
+    except Exception as e:
+        print(f"Error loading existing RAGAS results file: {e}. Will attempt to re-run RAGAS.")
+        ragas_summary_df = None # Force re-run
+else:
+    if FORCE_RERUN_RAGAS:
+        print(f"FORCE_RERUN_RAGAS is True. Will re-evaluate even if '{RAGAS_RESULTS_FILE}' exists.")
     else:
-        print("No valid data for RAGAS context_relevance evaluation (all entries might have had empty contexts).")
+        print(f"'{RAGAS_RESULTS_FILE}' not found. Will run RAGAS evaluation.")
 
-except ImportError:
-    print("RAGAS or datasets library not installed. Skipping RAGAS context_relevance evaluation.")
-    print("Install with: pip install ragas datasets")
-except Exception as e:
-    print(f"An error occurred during RAGAS setup or evaluation: {e}")
-    print("Skipping RAGAS context_relevance evaluation. Check your LLM setup for RAGAS.")
 
-print("\n--- Evaluation Data Generation Complete ---")
+if ragas_summary_df is None: # Only run RAGAS if results weren't loaded or need re-running
+    try:
+        if not ragas_input_df_filtered.empty:
+            results_accumulator = [] # Initialize here
+
+            for retriever_t in ragas_input_df_filtered['retriever_type'].unique():
+                print(f"\nEvaluating context_relevance for: {retriever_t}")
+                subset_df = ragas_input_df_filtered[ragas_input_df_filtered['retriever_type'] == retriever_t]
+                
+                if not subset_df.empty:
+                    subset_hf_dataset = Dataset.from_pandas(subset_df)
+                    
+                    try:
+                        score = evaluate(
+                            dataset=subset_hf_dataset,
+                            metrics=[ContextRelevance()],
+                            # llm=ragas_llm, # If not set, used default OpenAI llm
+                            # embeddings=ragas_embeddings, # If not set, used default OpenAI embedding
+                            raise_exceptions=True 
+                        )
+                        print(f"RAGAS Context Relevance Score for {retriever_t}:")
+                        print(score)
+                        results_accumulator.append({'retriever_type': retriever_t, 'context_relevance': score['nv_context_relevance']})
+                    except Exception as e:
+                        print(f"Could not run RAGAS evaluation for {retriever_t} due to LLM/environment error: {e}")
+                        print("Please ensure your RAGAS LLM (e.g., OpenAI API key) is correctly configured.")
+                        results_accumulator.append({'retriever_type': retriever_t, 'context_relevance': float('nan')})
+                else:
+                    print(f"No data to evaluate for {retriever_t}")
+            
+            if results_accumulator:
+                ragas_summary_df = pd.DataFrame(results_accumulator)
+                # Save the newly computed results
+                try:
+                    ragas_summary_df.to_csv(RAGAS_RESULTS_FILE, index=False)
+                    print(f"RAGAS evaluation results saved to: {RAGAS_RESULTS_FILE}")
+                except Exception as e:
+                    print(f"Error saving RAGAS results to CSV: {e}")
+            else:
+                print("No RAGAS results to accumulate or save.")
+                ragas_summary_df = pd.DataFrame(columns=['retriever_type', 'context_relevance']) # Empty df
+
+        else:
+            print("No valid data for RAGAS context_relevance evaluation (all entries might have had empty contexts).")
+            ragas_summary_df = pd.DataFrame(columns=['retriever_type', 'context_relevance']) # Empty df
+
+
+    except ImportError:
+        print("RAGAS or datasets library not installed. Skipping RAGAS context_relevance evaluation.")
+        print("Install with: pip install ragas datasets")
+        if ragas_summary_df is None: ragas_summary_df = pd.DataFrame(columns=['retriever_type', 'context_relevance']) # Empty df
+    except Exception as e:
+        print(f"An error occurred during RAGAS setup or outer evaluation loop: {e}")
+        print("Skipping RAGAS context_relevance evaluation. Check your LLM setup for RAGAS.")
+        if ragas_summary_df is None: ragas_summary_df = pd.DataFrame(columns=['retriever_type', 'context_relevance']) # Empty df
+
+
+# --- Display the final RAGAS summary (either loaded or newly computed) ---
+if ragas_summary_df is not None and not ragas_summary_df.empty:
+    print("\n--- Final RAGAS Context Relevance Summary ---")
+    print(ragas_summary_df)
+elif ragas_summary_df is not None and ragas_summary_df.empty and not (os.path.exists(RAGAS_RESULTS_FILE) and not FORCE_RERUN_RAGAS):
+    print("\n--- RAGAS Context Relevance Summary ---")
+    print("No RAGAS results were generated (e.g., due to empty input or errors during processing).")
+elif not (os.path.exists(RAGAS_RESULTS_FILE) and not FORCE_RERUN_RAGAS):
+     print("\n RAGAS evaluation was skipped or failed to produce results.")
+
+print("\n--- Evaluation Data Generation and RAGAS Context Relevance Complete/Loaded ---")

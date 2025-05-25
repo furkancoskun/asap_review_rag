@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import numpy as np
+import random
 from ragas import evaluate
 from ragas.metrics import ContextRelevance
 from datasets import Dataset
@@ -15,6 +16,10 @@ DENSE_STORAGE_PATH = 'retriever_storage/dense_all_minilm_l6_v2'
 TFIDF_STORAGE_PATH = 'retriever_storage/tfidf_baseline'
 RAGAS_RESULTS_FILE = "ragas_results/ragas_context_relevance_results.csv"
 FORCE_RERUN_RAGAS = False
+
+SEED = 42
+np.random.seed(SEED)
+random.seed(SEED)
 
 if not check_openai_api_key():
     print("a valid OPENAI_API_KEY is not set. Aborting")

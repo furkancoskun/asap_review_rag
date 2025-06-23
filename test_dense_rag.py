@@ -1,34 +1,6 @@
-PROMPT_RQ1_JUSTIFICATION = """
-Based ONLY on the provided context snippets from peer reviews below, generate a coherent and factually grounded justification for the paper's decision.
-Do not invent information not present in the snippets.
-
-Query/Task: {query}
-
-Context Snippets:
----
-{contexts}
----
-Justification:
-"""
-
-PROMPT_RQ2_DISAGREEMENT = """
-Based ONLY on the provided context snippets from peer reviews below, identify specific points of significant disagreement or contrasting opinions between reviewers regarding the paper's methods, results, or conclusions.
-For each point of disagreement, concisely explain the conflicting viewpoints and, if possible, refer to the statements that support each viewpoint.
-If no clear disagreement is found in these snippets, state that.
-
-Query/Task: {query}
-
-Context Snippets:
----
-{contexts}
----
-Identified Disagreements:
-"""
-
-
 import pandas as pd
 from retrievers.sentence_embedding_retriever import DenseRetriever 
-from rag_pipeline.rag_system import RAGSystem 
+from rag_pipeline.rag_system import RAGSystem, PROMPT_RQ1_JUSTIFICATION, PROMPT_RQ2_DISAGREEMENT
 
 DATA_SAVE_DIR = './data'
 DENSE_STORAGE_PATH = 'retriever_storage/dense_all_minilm_l6_v2'
